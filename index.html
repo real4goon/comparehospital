@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>타병원 인프라 비교 v3.7</title>
+<title>타병원 인프라 비교 v3.8</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700&family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -109,7 +109,7 @@
 
   <div class="sidebar">
     <div class="eyebrow">HIRA OPEN API</div>
-    <div class="versionbadge" id="versionBadge">v3.7</div>
+    <div class="versionbadge" id="versionBadge">v3.8</div>
     <h1>상급종합병원 47</h1>
 
     <div class="keybox" style="border-top:none;margin-top:0;padding-top:0;">
@@ -132,7 +132,7 @@
 
   <div class="main">
     <div class="top">
-      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.7</span></h2>
+      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.8</span></h2>
       <div class="src">병원정보서비스 · 의료기관별상세정보서비스</div>
     </div>
     <div class="status" id="status"></div>
@@ -175,7 +175,7 @@ const HOSPITALS = [
 
 const BASIS_PATH = "B551182/hospInfoServicev2/getHospBasisList";
 const DETAIL_BASE_PATH = "B551182/MadmDtlInfoService2.8";
-const CONCURRENCY = 2; // 동시에 몇 개 병원씩 처리할지 (Apps Script 동시 요청 제한 고려)
+const CONCURRENCY = 4; // 동시에 몇 개 병원씩 처리할지
 
 // ---- 로컬 캐시 (localStorage) ----
 // 참고: Claude 채팅 미리보기 화면에서는 브라우저 저장소가 비활성화되어 있어
@@ -307,8 +307,8 @@ async function fetchHospital(name){
     ["getTrnsprtInfo2.8"], ["getSpclHospAsgFldList2.8"], ["getFoepAddcInfo2.8"],
   ];
   const results = [];
-  for(let i=0;i<detailCalls.length;i+=3){
-    const batch = detailCalls.slice(i,i+3).map(([op])=>
+  for(let i=0;i<detailCalls.length;i+=5){
+    const batch = detailCalls.slice(i,i+5).map(([op])=>
       callApi(DETAIL_BASE_PATH + "/" + op, { ykiho }).catch(()=>({}))
     );
     results.push(...await Promise.all(batch));
