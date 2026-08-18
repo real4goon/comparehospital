@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>타병원 인프라 비교 v3.13</title>
+<title>타병원 인프라 비교 v3.15</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700&family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -146,10 +146,11 @@
 
   <div class="main">
     <div class="top">
-      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.13</span></h2>
+      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.15</span></h2>
       <div class="src">병원정보서비스 · 의료기관별상세정보서비스</div>
     </div>
     <div class="status" id="status"></div>
+    <div id="elapsedTime" style="display:none;font-size:12px;color:var(--accent);font-weight:600;margin:-6px 0 10px;"></div>
     <div class="progress-track" id="progTrack"><div class="progress-fill" id="progFill"></div></div>
     <div class="viewtoggle" id="viewToggle" style="display:none;">
       <button id="viewGraphBtn" class="on" onclick="setViewMode('graph')">📊 그래프형</button>
@@ -288,7 +289,13 @@ function statusMsg(t, err){
 
 async function callApi(path, params){
   const qs = new URLSearchParams(Object.assign({ path: path, pageNo:1, numOfRows:100 }, params));
-  const res = await fetch(PROXY_URL + "?" + qs.toString(), { signal: AbortSignal.timeout(15000) });
+  let res;
+  try{
+    res = await fetch(PROXY_URL + "?" + qs.toString(), { signal: AbortSignal.timeout(15000) });
+  }catch(e){
+    if(e.name === "TimeoutError" || e.name === "AbortError") throw new Error("시간초과(15초)");
+    throw new Error("네트워크 오류: " + e.message);
+  }
   if(!res.ok) throw new Error("프록시 응답 오류 (" + res.status + ")");
   return await res.json();
 }
@@ -394,6 +401,14 @@ async function runCompare(){
   document.getElementById("progTrack").style.display = "block";
   document.getElementById("progFill").style.width = "0%";
 
+  const startedAt = Date.now();
+  const elapsedStr = () => ((Date.now()-startedAt)/1000).toFixed(1) + "초";
+  let lastProgressText = "";
+  const timerId = setInterval(()=>{
+    document.getElementById("elapsedTime").textContent = "⏱ 경과 " + elapsedStr();
+  }, 500);
+  document.getElementById("elapsedTime").style.display = "inline";
+
   const worker = async (name)=>{
     const d = await fetchHospital(name);
     if(!d.error) saveCache(d);
@@ -401,7 +416,8 @@ async function runCompare(){
   };
   const onProgress = (done,total)=>{
     document.getElementById("progFill").style.width = Math.round(done/total*100) + "%";
-    statusMsg(`수집 중… ${done}/${total} (속도 ${CONCURRENCY})`);
+    lastProgressText = `수집 중… ${done}/${total} (속도 ${CONCURRENCY})`;
+    statusMsg(lastProgressText);
   };
 
   statusMsg(`${list.length}개 병원 수집 중…`);
@@ -421,11 +437,16 @@ async function runCompare(){
     retryRound++;
   }
 
+  clearInterval(timerId);
   btn.disabled = false;
   document.getElementById("progTrack").style.display = "none";
+  document.getElementById("elapsedTime").style.display = "none";
   const ok = collected.filter(d=>!d.error);
-  if(ok.length === 0){ statusMsg("수집된 데이터가 없습니다.", true); document.getElementById("emptyHint").style.display="block"; return; }
-  statusMsg(`${ok.length}개 병원 수집 완료 (실패 ${collected.length-ok.length}개).`);
+  const totalSec = ((Date.now()-startedAt)/1000).toFixed(1);
+  const timeoutCnt = collected.filter(d=>d.error && d.error.includes("시간초과")).length;
+  if(ok.length === 0){ statusMsg(`수집된 데이터가 없습니다. (${totalSec}초 소요)`, true); document.getElementById("emptyHint").style.display="block"; return; }
+  const failNote = timeoutCnt > 0 ? ` (그 중 시간초과 ${timeoutCnt}개)` : "";
+  statusMsg(`${ok.length}개 병원 수집 완료 · 총 ${totalSec}초 소요 (실패 ${collected.length-ok.length}개${failNote}).`);
   renderResults(ok);
   document.getElementById("exportBtn").style.display = "inline-block";
   document.getElementById("viewToggle").style.display = "flex";
@@ -519,7 +540,11 @@ function etcHstDetailCard(data){
       <div>${jobs || '<span style="color:var(--ink-soft);font-size:12px;">등록된 직종 없음</span>'}</div>
     </div>`;
   }).join("");
-  return `<div class="metric-card"><div class="mhead"><div class="mtitle">기타 인력 직종별 상세</div><div class="munit">약사·물리치료사 등</div></div>${rows}</div>`;
+  return `<div class="metric-card">
+    <div class="mhead"><div class="mtitle">기타 인력 직종별 상세</div><div class="munit">약사·물리치료사 등</div></div>
+    <div style="font-size:11.5px;color:var(--ink-soft);margin:-4px 0 10px;">⚠️ 의사·간호사는 포함되지 않습니다. 각각 "의료 인력", "간호등급" 카드에서 별도로 확인하세요.</div>
+    ${rows}
+  </div>`;
 }
 function spclDiagListCard(data){
   const rows = data.map(d=>{
