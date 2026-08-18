@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>타병원 인프라 비교 v3.9</title>
+<title>타병원 인프라 비교 v3.12</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700&family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -123,6 +123,14 @@
         ✅ Apps Script 프록시 연결됨 (인증키 서버에 보관중)
       </div>
     </div>
+
+    <div class="keybox">
+      <label>⚡ 속도 (동시 처리 병원 수): <span id="concLabel">8</span>곳</label>
+      <input type="range" id="concSlider" min="1" max="15" value="8"
+        oninput="CONCURRENCY = Number(this.value); document.getElementById('concLabel').textContent = this.value;"
+        style="width:100%;accent-color:#8FD3C9;">
+      <div style="font-size:10.5px;color:rgba(255,255,255,.45);margin-top:4px;">실패한 병원은 속도를 자동으로 낮춰 다시 시도합니다. 직접 안 만지셔도 됩니다.</div>
+    </div>
     <button class="runbtn" id="runBtn" onclick="runCompare()">② 선택 병원 비교 시작</button>
     <button class="runbtn" style="background:transparent;border:1px solid rgba(255,255,255,.25);margin-top:6px;font-size:11px;padding:8px;" onclick="tryLoadCache()">이전 캐시 불러오기</button>
     <button class="runbtn" style="background:transparent;border:1px solid rgba(255,255,255,.25);margin-top:6px;font-size:11px;padding:8px;" onclick="clearCache()">저장된 캐시 지우기</button>
@@ -138,7 +146,7 @@
 
   <div class="main">
     <div class="top">
-      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.9</span></h2>
+      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.12</span></h2>
       <div class="src">병원정보서비스 · 의료기관별상세정보서비스</div>
     </div>
     <div class="status" id="status"></div>
@@ -185,7 +193,7 @@ const HOSPITALS = [
 
 const BASIS_PATH = "B551182/hospInfoServicev2/getHospBasisList";
 const DETAIL_BASE_PATH = "B551182/MadmDtlInfoService2.8";
-const CONCURRENCY = 8; // 동시에 몇 개 병원씩 처리할지
+let CONCURRENCY = 8; // 동시에 몇 개 병원씩 처리할지 (화면 슬라이더로 조절 가능)
 
 // ---- 로컬 캐시 (localStorage) ----
 // 참고: Claude 채팅 미리보기 화면에서는 브라우저 저장소가 비활성화되어 있어
@@ -305,7 +313,7 @@ async function fetchHospital(name){
     drTotCnt: num(bi.drTotCnt),
     sdrCnt: num(bi.mdeptSdrCnt) + num(bi.detySdrCnt) + num(bi.cmdcSdrCnt),
     mriCnt:0, ctCnt:0, petCnt:0, sonoCnt:0,
-    nursingGrade:"-", dgsbjtCnt:0, spclDiagCnt:0, etcHstCnt:0,
+    nursingGrade:"-", nursingGradePpN:"-", dgsbjtCnt:0, spclDiagCnt:0, etcHstCnt:0,
     permSbdCnt:0, stdSickbdCnt:0, hghrSickbdCnt:0,
     trnsprtCnt:0, spclHospCnt:0, foepCnt:0
   };
@@ -328,8 +336,10 @@ async function fetchHospital(name){
     if(nm.includes("PET") || nm.includes("양전자")) data.petCnt += c;
     if(nm.includes("초음파")) data.sonoCnt += c;
   });
-  const hi = items(nurs).find(n => String(n.tyCd) === "01");
+  const hi = items(nurs).find(n => String(n.tyCd) === "01"); // 병상수 기준(건강보험) - 구 방식
   if(hi) data.nursingGrade = String(hi.careGrd);
+  const hiPpN = items(nurs).find(n => String(n.tyCd) === "05"); // 환자수 기준(건강보험) - 2024년 이후 실제 적용 기준
+  if(hiPpN) data.nursingGradePpN = String(hiPpN.careGrd);
   data.dgsbjtCnt = items(dgsbjt).length;
   data.spclDiagCnt = items(spcl).length;
   data.etcHstCnt = items(etc).reduce((s,e)=> s + num(e.gnlNopCnt), 0);
@@ -377,16 +387,32 @@ async function runCompare(){
   document.getElementById("progTrack").style.display = "block";
   document.getElementById("progFill").style.width = "0%";
 
-  statusMsg(`${list.length}개 병원 동시 수집 중 (최대 ${CONCURRENCY}곳씩 병렬)…`);
-
-  collected = await runPool(list, async (name)=>{
+  const worker = async (name)=>{
     const d = await fetchHospital(name);
     if(!d.error) saveCache(d);
     return d;
-  }, (done,total)=>{
+  };
+  const onProgress = (done,total)=>{
     document.getElementById("progFill").style.width = Math.round(done/total*100) + "%";
-    statusMsg(`수집 중… ${done}/${total}`);
-  });
+    statusMsg(`수집 중… ${done}/${total} (속도 ${CONCURRENCY})`);
+  };
+
+  statusMsg(`${list.length}개 병원 수집 중…`);
+  collected = await runPool(list, worker, onProgress);
+
+  // 실패한 병원이 있으면 속도를 자동으로 낮춰 최대 2회 재시도 (사용자가 손댈 필요 없음)
+  let retryRound = 0;
+  while(collected.some(d=>d.error) && retryRound < 2 && CONCURRENCY > 1){
+    const failedNames = collected.filter(d=>d.error).map(d=>d.name);
+    CONCURRENCY = Math.max(1, Math.floor(CONCURRENCY/2));
+    document.getElementById("concSlider").value = CONCURRENCY;
+    document.getElementById("concLabel").textContent = CONCURRENCY;
+    statusMsg(`${failedNames.length}곳 재시도 중… (속도 자동으로 ${CONCURRENCY}로 낮춤)`);
+    const retried = await runPool(failedNames, worker, onProgress);
+    const retriedMap = Object.fromEntries(retried.map(d=>[d.name, d]));
+    collected = collected.map(d => d.error && retriedMap[d.name] ? retriedMap[d.name] : d);
+    retryRound++;
+  }
 
   btn.disabled = false;
   document.getElementById("progTrack").style.display = "none";
@@ -415,7 +441,7 @@ const METRIC_GROUPS = [
     { key:"spclDiagCnt", title:"특수진료 가능분야 수", unit:"개" },
     { key:"spclHospCnt", title:"전문병원 지정분야 수", unit:"개 · 참고용" },
   ]},
-  { title:"병상 현황 (필드 검증 필요)", metrics:[
+  { title:"병상 현황 (필드 검증 필요)", note:"⚠️ 심평원 서버가 이 항목에 일시적으로 빈 값을 반환하는 현상이 있습니다. 0으로 나오면 나중에 다시 시도해주세요.", metrics:[
     { key:"permSbdCnt", title:"허가병상수", unit:"병상" },
     { key:"stdSickbdCnt", title:"일반병상수", unit:"병상" },
     { key:"hghrSickbdCnt", title:"상급병상수", unit:"병상" },
@@ -445,12 +471,20 @@ function barCard(m, data){
   return `<div class="metric-card"><div class="mhead"><div class="mtitle">${title}</div><div class="munit">${unit}</div></div>${rows}</div>`;
 }
 function gradeCard(data){
+  const fmt = (g) => (g === "-" || g === "undefined" || g === undefined) ? "정보없음" : (isNaN(g) ? g + "등급" : g + "등급");
   const rows = data.map(d=>{
-    const g = d.nursingGrade;
-    const show = (g === "-" || g === "undefined") ? "정보없음" : (isNaN(g) ? g : g + "등급");
-    return `<div class="grade-row"><div>${d.name}</div><div class="grade-badge">${show}</div></div>`;
+    return `<div class="grade-row">
+      <div>${d.name}</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span class="grade-badge">${fmt(d.nursingGradePpN)}</span>
+        <span style="font-size:10px;color:var(--ink-soft);">환자수 기준</span>
+        <span style="font-size:10px;color:var(--line);">·</span>
+        <span style="font-size:11px;color:var(--ink-soft);">${fmt(d.nursingGrade)}</span>
+        <span style="font-size:10px;color:var(--ink-soft);">병상수 기준(구)</span>
+      </div>
+    </div>`;
   }).join("");
-  return `<div class="metric-card"><div class="mhead"><div class="mtitle">간호등급 (건강보험 기준)</div><div class="munit">숫자가 낮을수록 상위 등급</div></div>${rows}</div>`;
+  return `<div class="metric-card"><div class="mhead"><div class="mtitle">간호등급 (건강보험)</div><div class="munit">2024년부터 환자수 기준이 실제 적용 기준</div></div>${rows}</div>`;
 }
 function groupTable(group, data){
   const head = `<th style="text-align:left;">병원</th>` + group.metrics.map(m=>`<th>${m.title}</th>`).join("");
@@ -477,6 +511,7 @@ function groupSectionHtml(group, data){
   }
   return `<div class="group-section">
     <div class="group-title">${group.title}</div>
+    ${group.note ? `<div style="font-size:12px;color:var(--ink-soft);margin:-4px 0 10px;">${group.note}</div>` : ""}
     <div style="display:flex;flex-direction:column;gap:12px;">${body}</div>
   </div>`;
 }
@@ -505,7 +540,7 @@ function exportExcel(){
   const rows = data.map(d=>({
     "병원명":d.name,"의사총수":d.drTotCnt,"전문의수":d.sdrCnt,
     "MRI":d.mriCnt,"CT":d.ctCnt,"PET":d.petCnt,"초음파":d.sonoCnt,
-    "간호등급(건보)":d.nursingGrade,"진료과목수":d.dgsbjtCnt,
+    "간호등급(환자수기준,건보)":d.nursingGradePpN,"간호등급(병상수기준,건보)":d.nursingGrade,"진료과목수":d.dgsbjtCnt,
     "특수진료분야수":d.spclDiagCnt,"기타인력총수":d.etcHstCnt,
     "허가병상수(검증필요)":d.permSbdCnt,"일반병상수(검증필요)":d.stdSickbdCnt,"상급병상수(검증필요)":d.hghrSickbdCnt,
     "교통정보항목수":d.trnsprtCnt,"전문병원지정분야수":d.spclHospCnt,"식대가산항목수":d.foepCnt
