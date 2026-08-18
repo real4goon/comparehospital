@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>타병원 인프라 비교 v3.12</title>
+<title>타병원 인프라 비교 v3.13</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700&family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -146,7 +146,7 @@
 
   <div class="main">
     <div class="top">
-      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.12</span></h2>
+      <h2>인프라 비교 결과 <span style="font-family:'Pretendard';font-size:13px;background:var(--brick-soft);color:var(--brick);padding:3px 10px;border-radius:20px;vertical-align:middle;">v3.13</span></h2>
       <div class="src">병원정보서비스 · 의료기관별상세정보서비스</div>
     </div>
     <div class="status" id="status"></div>
@@ -315,7 +315,8 @@ async function fetchHospital(name){
     mriCnt:0, ctCnt:0, petCnt:0, sonoCnt:0,
     nursingGrade:"-", nursingGradePpN:"-", dgsbjtCnt:0, spclDiagCnt:0, etcHstCnt:0,
     permSbdCnt:0, stdSickbdCnt:0, hghrSickbdCnt:0,
-    trnsprtCnt:0, spclHospCnt:0, foepCnt:0
+    trnsprtCnt:0, spclHospCnt:0, foepCnt:0,
+    spclDiagNames:[], etcHstDetail:{}
   };
 
   const detailCalls = [
@@ -342,7 +343,13 @@ async function fetchHospital(name){
   if(hiPpN) data.nursingGradePpN = String(hiPpN.careGrd);
   data.dgsbjtCnt = items(dgsbjt).length;
   data.spclDiagCnt = items(spcl).length;
+  data.spclDiagNames = items(spcl).map(s=>s.srchCdNm).filter(Boolean);
   data.etcHstCnt = items(etc).reduce((s,e)=> s + num(e.gnlNopCnt), 0);
+  data.etcHstDetail = {};
+  items(etc).forEach(e=>{
+    const job = e.dtlGnlNopCdNm || "기타";
+    data.etcHstDetail[job] = (data.etcHstDetail[job]||0) + num(e.gnlNopCnt);
+  });
 
   // --- 신규 추가: 세부정보 / 교통정보 / 전문병원지정분야 / 식대가산정보 ---
   const dtlItem = items(dtl)[0];
@@ -500,10 +507,39 @@ function groupTable(group, data){
     </table>
   </div>`;
 }
+function etcHstDetailCard(data){
+  const rows = data.map(d=>{
+    const isMine = d.name.includes("한림");
+    const jobs = Object.entries(d.etcHstDetail||{}).filter(([,c])=>c>0)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([job,cnt])=>`<span style="display:inline-block;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:2px 10px;margin:2px 4px 2px 0;font-size:11.5px;">${job} ${cnt}명</span>`)
+      .join("");
+    return `<div class="item" style="padding:10px 0;border-bottom:1px dashed var(--line-soft);">
+      <div class="name${isMine?' me':''}" style="font-weight:${isMine?'700':'600'};color:${isMine?'var(--brick)':'var(--ink)'};margin-bottom:6px;">${d.name} <span style="font-weight:400;color:var(--ink-soft);font-size:12px;">(총 ${(d.etcHstCnt||0).toLocaleString()}명)</span></div>
+      <div>${jobs || '<span style="color:var(--ink-soft);font-size:12px;">등록된 직종 없음</span>'}</div>
+    </div>`;
+  }).join("");
+  return `<div class="metric-card"><div class="mhead"><div class="mtitle">기타 인력 직종별 상세</div><div class="munit">약사·물리치료사 등</div></div>${rows}</div>`;
+}
+function spclDiagListCard(data){
+  const rows = data.map(d=>{
+    const isMine = d.name.includes("한림");
+    const names = (d.spclDiagNames||[]).join(", ");
+    return `<details class="item" style="padding:8px 0;border-bottom:1px dashed var(--line-soft);">
+      <summary style="cursor:pointer;font-weight:${isMine?'700':'600'};color:${isMine?'var(--brick)':'var(--ink)'};">${d.name} <span style="font-weight:400;color:var(--ink-soft);font-size:12px;">(${(d.spclDiagNames||[]).length}개 · 클릭해서 목록보기)</span></summary>
+      <div style="margin-top:6px;font-size:12.5px;color:var(--ink-soft);">${names || "등록된 분야 없음"}</div>
+    </details>`;
+  }).join("");
+  return `<div class="metric-card"><div class="mhead"><div class="mtitle">특수진료 가능분야 목록</div><div class="munit">병원명 클릭 시 펼침</div></div>${rows}</div>`;
+}
 function groupSectionHtml(group, data){
   let body;
   if(group.special === "grade"){
     body = gradeCard(data);
+  } else if(group.special === "etcHstDetail"){
+    body = etcHstDetailCard(data);
+  } else if(group.special === "spclDiagList"){
+    body = spclDiagListCard(data);
   } else if(viewMode === "table"){
     body = groupTable(group, data);
   } else {
@@ -527,9 +563,11 @@ function renderResults(data){
   box.style.flexDirection = "column";
   box.style.gap = "22px";
   const groups = [
-    METRIC_GROUPS[0], METRIC_GROUPS[1],
+    METRIC_GROUPS[0], { title:"기타 인력 직종별 상세", special:"etcHstDetail" },
+    METRIC_GROUPS[1],
     { title:"간호등급", special:"grade" },
-    METRIC_GROUPS[2], METRIC_GROUPS[3], METRIC_GROUPS[4],
+    METRIC_GROUPS[2], { title:"특수진료 가능분야 목록", special:"spclDiagList" },
+    METRIC_GROUPS[3], METRIC_GROUPS[4],
   ];
   box.innerHTML = groups.map(g=>groupSectionHtml(g, data)).join("");
 }
